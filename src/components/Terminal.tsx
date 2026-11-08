@@ -122,8 +122,10 @@ export const Terminal: React.FC<TerminalProps> = ({
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const [, setCurrentCommand] = useState("");
-  const [commandHistory, setCommandHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  // Refs, not state: the xterm onData handler is registered once on mount,
+  // so it would only ever see the initial (empty) history if this were state.
+  const commandHistoryRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
   const [isTerminalReady, setIsTerminalReady] = useState(false);
   const [shellState, setShellState] = useState<ShellState>({
     mode: "bash",
@@ -347,19 +349,21 @@ export const Terminal: React.FC<TerminalProps> = ({
         term.onData((data) => {
           const result = handleKeyboardInput(data, {
             term,
-            commandHistory,
-            historyIndex,
+            commandHistory: commandHistoryRef.current,
+            historyIndex: historyIndexRef.current,
             currentLine,
             currentNode: currentContext.current.currentNode,
             onExecute: executeCommand,
-            onHistoryChange: setHistoryIndex,
+            onHistoryChange: (index) => {
+              historyIndexRef.current = index;
+            },
             onLineChange: setCurrentCommand,
             onPrompt: prompt,
           });
           if (result) {
             currentLine = result.currentLine;
             setCurrentCommand(result.currentLine);
-            setHistoryIndex(result.historyIndex);
+            historyIndexRef.current = result.historyIndex;
           }
         });
 
@@ -965,7 +969,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     });
 
     router.register("history", () => {
-      const lines = commandHistory.map(
+      const lines = commandHistoryRef.current.map(
         (cmd, i) => `  ${String(i + 1).padStart(4)}  ${cmd}`,
       );
       return { output: lines.join("\n"), exitCode: 0 };
@@ -1210,7 +1214,7 @@ export const Terminal: React.FC<TerminalProps> = ({
       );
 
       // Add to history (store the original, unexpanded form)
-      setCommandHistory((prev) => [...prev, originalCmdLine]);
+      commandHistoryRef.current.push(originalCmdLine);
       currentContext.current.history.push(originalCmdLine);
 
       // Parse command
@@ -1475,8 +1479,8 @@ export const Terminal: React.FC<TerminalProps> = ({
       const newNode = newCluster.nodes[0]?.id || "dgx-00";
       term.reset();
       currentLine = "";
-      setCommandHistory([]);
-      setHistoryIndex(-1);
+      commandHistoryRef.current = [];
+      historyIndexRef.current = -1;
       setConnectedNode(newNode);
       currentContext.current.currentNode = newNode;
       currentContext.current.currentPath = "/root";

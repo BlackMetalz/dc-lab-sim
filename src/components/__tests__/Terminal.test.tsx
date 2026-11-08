@@ -290,6 +290,7 @@ vi.mock("../../simulators/linuxUtilsSimulator", () => ({
 
 import { Terminal } from "../Terminal";
 import { generateWelcomeMessage } from "../../constants/terminalConfig";
+import { handleKeyboardInput } from "../../utils/terminalKeyboardHandler";
 
 describe("Terminal", () => {
   beforeEach(() => {
@@ -385,5 +386,80 @@ describe("Terminal", () => {
       expect(onReady).toHaveBeenCalled();
     });
     expect(generateWelcomeMessage).not.toHaveBeenCalled();
+  });
+
+  describe("command history", () => {
+    // The onData handler is registered once on mount, so these tests guard
+    // against it reading a stale (empty) history.
+    beforeEach(async () => {
+      // Use the real keyboard handler so arrow keys go through history.
+      const actual = await vi.importActual<
+        typeof import("../../utils/terminalKeyboardHandler")
+      >("../../utils/terminalKeyboardHandler");
+      vi.mocked(handleKeyboardInput).mockImplementation(
+        actual.handleKeyboardInput,
+      );
+    });
+
+    const getOnData = () =>
+      (
+        mockTerminal.onData.mock.calls[0] as unknown as [(d: string) => void]
+      )[0];
+
+    const runCommand = async (onData: (d: string) => void, cmd: string) => {
+      await act(async () => {
+        for (const ch of cmd) onData(ch);
+        onData("\r");
+      });
+    };
+
+    const lastWrite = () => {
+      const calls = mockTerminal.write.mock.calls;
+      return calls[calls.length - 1]?.[0];
+    };
+
+    it("recalls previous commands with Up and Down arrows", async () => {
+      render(<Terminal />);
+      await waitFor(() => expect(mockTerminal.onData).toHaveBeenCalled());
+      const onData = getOnData();
+
+      await runCommand(onData, "whoami");
+      await runCommand(onData, "dcgmi health -s a");
+
+      act(() => onData("\x1b[A"));
+      expect(lastWrite()).toBe("dcgmi health -s a");
+
+      act(() => onData("\x1b[A"));
+      expect(lastWrite()).toBe("whoami");
+
+      // Already at the oldest entry: stays there
+      act(() => onData("\x1b[A"));
+      expect(lastWrite()).toBe("whoami");
+
+      act(() => onData("\x1b[B"));
+      expect(lastWrite()).toBe("dcgmi health -s a");
+
+      // Past the newest entry: back to an empty line
+      act(() => onData("\x1b[B"));
+      expect(lastWrite()).toBe("");
+    });
+
+    it("re-runs a recalled command with Enter", async () => {
+      render(<Terminal />);
+      await waitFor(() => expect(mockTerminal.onData).toHaveBeenCalled());
+      const onData = getOnData();
+
+      await runCommand(onData, "whoami");
+      await act(async () => {
+        onData("\x1b[A");
+        onData("\r");
+      });
+
+      // Both runs are recorded, so Up now shows "whoami" twice in a row
+      act(() => onData("\x1b[A"));
+      expect(lastWrite()).toBe("whoami");
+      act(() => onData("\x1b[A"));
+      expect(lastWrite()).toBe("whoami");
+    });
   });
 });
